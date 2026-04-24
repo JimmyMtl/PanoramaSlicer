@@ -139,7 +139,8 @@ class App(tk.Tk):
         sidebar_outer.pack_propagate(False)
 
         self._sb_canvas = tk.Canvas(
-            sidebar_outer, bg=SIDEBAR_BG, highlightthickness=0, bd=0
+            sidebar_outer, bg=SIDEBAR_BG, highlightthickness=0, bd=0,
+            yscrollincrement=20,
         )
         sb_scrollbar = ttk.Scrollbar(
             sidebar_outer, orient=tk.VERTICAL, command=self._sb_canvas.yview
@@ -168,17 +169,21 @@ class App(tk.Tk):
         right = tk.Frame(self)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._build_sidebar()
-        self._bind_sidebar_scroll(self._sidebar)
         self._build_preview(right)
+        # bind_all is the only reliable way to catch trackpad events on macOS
+        self.bind_all("<MouseWheel>", self._route_sidebar_scroll)
 
-    def _bind_sidebar_scroll(self, widget: tk.Widget) -> None:
-        """Bind mousewheel on widget and all descendants to scroll the sidebar."""
-        widget.bind("<MouseWheel>", self._on_sidebar_scroll)
-        for child in widget.winfo_children():
-            self._bind_sidebar_scroll(child)
-
-    def _on_sidebar_scroll(self, event: tk.Event) -> None:
-        self._sb_canvas.yview_scroll(-(event.delta // 120), "units")
+    def _route_sidebar_scroll(self, event: tk.Event) -> None:
+        """Scroll sidebar only when the cursor is over it."""
+        w = event.widget
+        while w is not None:
+            if w is self._sidebar or w is self._sb_canvas:
+                if event.delta > 0:
+                    self._sb_canvas.yview_scroll(-1, "units")
+                elif event.delta < 0:
+                    self._sb_canvas.yview_scroll(1, "units")
+                return
+            w = getattr(w, "master", None)
 
     # ── sidebar ───────────────────────────────────────────────────────────────
 
