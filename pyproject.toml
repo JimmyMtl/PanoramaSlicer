@@ -1,0 +1,44 @@
+[project]
+name = "panoramaslice"
+version = "1.0.0"
+description = "Split any wide image into perfectly aligned Instagram carousel slides"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+keywords = ["instagram", "carousel", "panorama", "image", "social media"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: MacOS X",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics",
+]
+dependencies = [
+    "Pillow>=10.0.0",
+    "osxphotos>=0.68.0; sys_platform == 'darwin'",
+    "pillow-heif>=0.16.0; sys_platform == 'darwin'",
+]
+
+[project.urls]
+Homepage = "https://github.com/JimmyMtl/panoramaSlice"
+Issues   = "https://github.com/JimmyMtl/panoramaSlice/issues"
+
+[project.scripts]
+panorama_slice     = "insta_pano.main:main"
+panorama_slice_gui = "insta_pano.gui:launch"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["insta_pano*"]
+
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
