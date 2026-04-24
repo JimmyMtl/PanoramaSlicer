@@ -6,7 +6,8 @@
       "Bash(uv sync *)",
       "Bash(uv run *)",
       "Bash(uv python *)",
-      "Bash(~/.local/bin/uv run *)"
+      "Bash(~/.local/bin/uv run *)",
+      "Bash(python3 *)"
     ]
   }
 }

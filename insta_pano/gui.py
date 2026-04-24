@@ -45,6 +45,8 @@ SIDEBAR_W = 300
 TILE_H = 100
 PREVIEW_BG = "#111111"
 TILE_BG = "#1a1a1a"
+SIDEBAR_BG = "#1c1c1e"
+SECTION_FG = "#8e8e93"
 _ZOOM_MIN = 1.0
 _ZOOM_MAX = 3.0
 
@@ -124,28 +126,78 @@ class App(tk.Tk):
 
     def _build_ui(self) -> None:
         self._status_var = tk.StringVar(value="Ready — open an image to begin.")
-        tk.Label(self, textvariable=self._status_var, anchor="w",
-                 relief="sunken", padx=8, pady=3,
-                 font=("", 10)).pack(side=tk.BOTTOM, fill=tk.X)
+        status_bar = tk.Frame(self, bg="#0d0d0d")
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        tk.Frame(status_bar, bg="#2a2a2a", height=1).pack(fill=tk.X)
+        tk.Label(status_bar, textvariable=self._status_var, anchor="w",
+                 bg="#0d0d0d", fg="#8e8e93", padx=10, pady=5,
+                 font=("", 10)).pack(fill=tk.X)
 
-        self._sidebar = tk.Frame(self, width=SIDEBAR_W, relief="flat", bd=0)
-        self._sidebar.pack(side=tk.LEFT, fill=tk.Y)
-        self._sidebar.pack_propagate(False)
+        # Sidebar: fixed-width container holding a scrollable canvas
+        sidebar_outer = tk.Frame(self, width=SIDEBAR_W, bg=SIDEBAR_BG)
+        sidebar_outer.pack(side=tk.LEFT, fill=tk.Y)
+        sidebar_outer.pack_propagate(False)
+
+        self._sb_canvas = tk.Canvas(
+            sidebar_outer, bg=SIDEBAR_BG, highlightthickness=0, bd=0
+        )
+        sb_scrollbar = ttk.Scrollbar(
+            sidebar_outer, orient=tk.VERTICAL, command=self._sb_canvas.yview
+        )
+        self._sb_canvas.configure(yscrollcommand=sb_scrollbar.set)
+        sb_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self._sb_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._sidebar = tk.Frame(self._sb_canvas, bg=SIDEBAR_BG)
+        self._sb_win = self._sb_canvas.create_window(
+            (0, 0), window=self._sidebar, anchor="nw"
+        )
+        self._sidebar.bind(
+            "<Configure>",
+            lambda e: self._sb_canvas.configure(
+                scrollregion=self._sb_canvas.bbox("all")
+            ),
+        )
+        self._sb_canvas.bind(
+            "<Configure>",
+            lambda e: self._sb_canvas.itemconfig(self._sb_win, width=e.width),
+        )
+
         ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y)
 
         right = tk.Frame(self)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._build_sidebar()
+        self._bind_sidebar_scroll(self._sidebar)
         self._build_preview(right)
+
+    def _bind_sidebar_scroll(self, widget: tk.Widget) -> None:
+        """Bind mousewheel on widget and all descendants to scroll the sidebar."""
+        widget.bind("<MouseWheel>", self._on_sidebar_scroll)
+        for child in widget.winfo_children():
+            self._bind_sidebar_scroll(child)
+
+    def _on_sidebar_scroll(self, event: tk.Event) -> None:
+        self._sb_canvas.yview_scroll(-(event.delta // 120), "units")
 
     # ── sidebar ───────────────────────────────────────────────────────────────
 
     def _build_sidebar(self) -> None:
         f = self._sidebar
-        FULL = dict(padx=10, pady=2, fill=tk.X)
+        FULL = dict(padx=12, pady=3, fill=tk.X)
+        LBL = dict(bg=SIDEBAR_BG, fg="#d1d1d6", font=("", 10))
+        LBL_SM = dict(bg=SIDEBAR_BG, fg=SECTION_FG, font=("", 9))
 
+        # ── App title ─────────────────────────────────────────────────────────
+        tk.Label(f, text="panoramaSlice", bg=SIDEBAR_BG, fg="#ffffff",
+                 font=("", 13, "bold"), anchor="w").pack(padx=12, pady=(14, 0), fill=tk.X)
+        tk.Label(f, text="Carousel Generator", **LBL_SM, anchor="w").pack(
+            padx=12, pady=(0, 10), fill=tk.X)
+        tk.Frame(f, bg="#2c2c2e", height=1).pack(fill=tk.X, padx=0, pady=(0, 4))
+
+        # ── Input ─────────────────────────────────────────────────────────────
         self._section(f, "INPUT IMAGE")
-        src_row = tk.Frame(f)
+        src_row = tk.Frame(f, bg=SIDEBAR_BG)
         src_row.pack(**FULL)
         ttk.Button(src_row, text="File…",
                    command=self._browse_input).pack(side=tk.LEFT, expand=True, fill=tk.X)
@@ -153,73 +205,81 @@ class App(tk.Tk):
                    command=self._open_folder_picker).pack(
             side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0))
         if apple_photos_available():
-            ttk.Button(src_row, text="Apple Photos",
+            ttk.Button(src_row, text="Photos",
                        command=self._open_apple_photos).pack(
                 side=tk.LEFT, expand=True, fill=tk.X, padx=(4, 0))
 
         self._input_var = tk.StringVar()
         self._input_var.trace_add("write", lambda *_: self._on_input_changed())
-        tk.Entry(f, textvariable=self._input_var, state="readonly").pack(**FULL)
+        tk.Entry(f, textvariable=self._input_var, state="readonly",
+                 relief="flat", bd=1).pack(**FULL)
         self._img_info_var = tk.StringVar()
-        tk.Label(f, textvariable=self._img_info_var,
-                 fg="gray", font=("", 9), anchor="w").pack(padx=10, fill=tk.X)
+        tk.Label(f, textvariable=self._img_info_var, **LBL_SM, anchor="w").pack(
+            padx=12, pady=(0, 2), fill=tk.X)
 
+        # ── Output ────────────────────────────────────────────────────────────
         self._section(f, "OUTPUT")
         self._output_var = tk.StringVar(value=DEFAULT_OUTPUT_DIR)
-        row2 = tk.Frame(f)
+        row2 = tk.Frame(f, bg=SIDEBAR_BG)
         row2.pack(**FULL)
-        tk.Entry(row2, textvariable=self._output_var).pack(
+        tk.Entry(row2, textvariable=self._output_var, relief="flat", bd=1).pack(
             side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(row2, text="Browse",
                    command=self._browse_output).pack(side=tk.RIGHT, padx=(4, 0))
-        tk.Label(f, text="Filename prefix (optional)", anchor="w").pack(padx=10, anchor="w")
+        tk.Label(f, text="Filename prefix (optional)", **LBL_SM, anchor="w").pack(
+            padx=12, anchor="w")
         self._prefix_var = tk.StringVar()
-        tk.Entry(f, textvariable=self._prefix_var).pack(**FULL)
+        tk.Entry(f, textvariable=self._prefix_var, relief="flat", bd=1).pack(**FULL)
 
+        # ── Slides ────────────────────────────────────────────────────────────
         self._section(f, "SLIDES")
-        slides_row = tk.Frame(f)
+        slides_row = tk.Frame(f, bg=SIDEBAR_BG)
         slides_row.pack(**FULL)
-        tk.Label(slides_row, text="Count").pack(side=tk.LEFT)
+        tk.Label(slides_row, text="Count", **LBL).pack(side=tk.LEFT)
         self._slides_var = tk.IntVar(value=DEFAULT_SLIDES)
         self._slides_var.trace_add("write", lambda *_: self._schedule_preview())
         ttk.Spinbox(slides_row, from_=MIN_SLIDES, to=MAX_SLIDES,
                     width=5, textvariable=self._slides_var).pack(side=tk.RIGHT)
         ttk.Button(f, text="Auto-suggest from image ratio",
                    command=self._suggest_slides).pack(**FULL)
-        tk.Label(f, text="Format", anchor="w").pack(padx=10, anchor="w")
+        tk.Label(f, text="Format", **LBL_SM, anchor="w").pack(padx=12, anchor="w")
         self._format_var = tk.StringVar(value=DEFAULT_FORMAT)
         self._format_var.trace_add("write", lambda *_: self._schedule_preview())
         ttk.Combobox(f, textvariable=self._format_var,
                      values=list(FORMATS.keys()), state="readonly").pack(**FULL)
 
+        # ── Crop & Zoom ───────────────────────────────────────────────────────
         self._section(f, "CROP & ZOOM")
         tk.Label(f, text="Drag preview to pan  •  ← → ↑ ↓ to nudge",
-                 fg="gray", font=("", 8), anchor="w").pack(padx=10, fill=tk.X)
+                 **LBL_SM, anchor="w").pack(padx=12, pady=(0, 4), fill=tk.X)
 
-        hrow = tk.Frame(f)
+        hrow = tk.Frame(f, bg=SIDEBAR_BG)
         hrow.pack(**FULL)
-        tk.Label(hrow, text="Horizontal").pack(side=tk.LEFT)
-        self._crop_x_lbl = tk.Label(hrow, text="50%", font=("", 9, "bold"))
+        tk.Label(hrow, text="Horizontal", **LBL).pack(side=tk.LEFT)
+        self._crop_x_lbl = tk.Label(hrow, text="50%", bg=SIDEBAR_BG,
+                                     fg="#aeaeb2", font=("", 9, "bold"))
         self._crop_x_lbl.pack(side=tk.RIGHT)
         self._crop_x_var = tk.DoubleVar(value=0.5)
         self._crop_x_var.trace_add("write", lambda *_: self._on_crop_x_changed())
         ttk.Scale(f, from_=0.0, to=1.0, variable=self._crop_x_var,
                   orient=tk.HORIZONTAL).pack(**FULL)
 
-        vrow = tk.Frame(f)
+        vrow = tk.Frame(f, bg=SIDEBAR_BG)
         vrow.pack(**FULL)
-        tk.Label(vrow, text="Vertical").pack(side=tk.LEFT)
-        self._crop_y_lbl = tk.Label(vrow, text="50%", font=("", 9, "bold"))
+        tk.Label(vrow, text="Vertical", **LBL).pack(side=tk.LEFT)
+        self._crop_y_lbl = tk.Label(vrow, text="50%", bg=SIDEBAR_BG,
+                                     fg="#aeaeb2", font=("", 9, "bold"))
         self._crop_y_lbl.pack(side=tk.RIGHT)
         self._crop_y_var = tk.DoubleVar(value=0.5)
         self._crop_y_var.trace_add("write", lambda *_: self._on_crop_y_changed())
         ttk.Scale(f, from_=0.0, to=1.0, variable=self._crop_y_var,
                   orient=tk.HORIZONTAL).pack(**FULL)
 
-        zrow = tk.Frame(f)
+        zrow = tk.Frame(f, bg=SIDEBAR_BG)
         zrow.pack(**FULL)
-        tk.Label(zrow, text="Zoom").pack(side=tk.LEFT)
-        self._zoom_lbl = tk.Label(zrow, text="1.00×", font=("", 9, "bold"))
+        tk.Label(zrow, text="Zoom", **LBL).pack(side=tk.LEFT)
+        self._zoom_lbl = tk.Label(zrow, text="1.00×", bg=SIDEBAR_BG,
+                                   fg="#aeaeb2", font=("", 9, "bold"))
         self._zoom_lbl.pack(side=tk.RIGHT)
         self._zoom_var = tk.DoubleVar(value=1.0)
         self._zoom_var.trace_add("write", lambda *_: self._on_zoom_changed())
@@ -229,12 +289,13 @@ class App(tk.Tk):
         ttk.Button(f, text="Reset Crop & Zoom",
                    command=self._reset_crop).pack(**FULL)
 
+        # ── Export options ────────────────────────────────────────────────────
         self._section(f, "EXPORT")
-        qrow = tk.Frame(f)
+        qrow = tk.Frame(f, bg=SIDEBAR_BG)
         qrow.pack(**FULL)
-        tk.Label(qrow, text="JPEG Quality").pack(side=tk.LEFT)
+        tk.Label(qrow, text="JPEG Quality", **LBL).pack(side=tk.LEFT)
         self._quality_lbl = tk.Label(qrow, text=str(DEFAULT_QUALITY),
-                                     font=("", 10, "bold"))
+                                     bg=SIDEBAR_BG, fg="#aeaeb2", font=("", 10, "bold"))
         self._quality_lbl.pack(side=tk.RIGHT)
         self._quality_var = tk.IntVar(value=DEFAULT_QUALITY)
         self._quality_var.trace_add(
@@ -245,29 +306,42 @@ class App(tk.Tk):
                   orient=tk.HORIZONTAL).pack(**FULL)
         self._png_var = tk.BooleanVar()
         tk.Checkbutton(f, text="Export as PNG (lossless)",
-                       variable=self._png_var, anchor="w").pack(padx=10, fill=tk.X)
+                       variable=self._png_var, anchor="w",
+                       bg=SIDEBAR_BG, fg="#d1d1d6",
+                       activebackground=SIDEBAR_BG).pack(padx=12, pady=1, fill=tk.X)
         self._debug_var = tk.BooleanVar()
-        tk.Checkbutton(f, text="Burn slice markers into exported tiles",
-                       variable=self._debug_var, anchor="w").pack(padx=10, fill=tk.X)
+        tk.Checkbutton(f, text="Burn slice markers into tiles",
+                       variable=self._debug_var, anchor="w",
+                       bg=SIDEBAR_BG, fg="#d1d1d6",
+                       activebackground=SIDEBAR_BG).pack(padx=12, pady=1, fill=tk.X)
         self._dry_run_var = tk.BooleanVar()
         tk.Checkbutton(f, text="Dry run (preview only, no files written)",
-                       variable=self._dry_run_var, anchor="w").pack(padx=10, fill=tk.X)
+                       variable=self._dry_run_var, anchor="w",
+                       bg=SIDEBAR_BG, fg="#d1d1d6",
+                       activebackground=SIDEBAR_BG).pack(padx=12, pady=1, fill=tk.X)
 
-        ttk.Separator(f, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=10)
+        # ── Actions ───────────────────────────────────────────────────────────
+        tk.Frame(f, bg="#2c2c2e", height=1).pack(fill=tk.X, padx=0, pady=(14, 8))
+
         ttk.Button(f, text="Refresh Preview",
                    command=self._schedule_preview).pack(**FULL)
-        self._gen_btn = ttk.Button(f, text="Generate Carousel  (⌘G)",
+        tk.Frame(f, bg=SIDEBAR_BG, height=4).pack()
+        self._gen_btn = ttk.Button(f, text="⌘G  Generate Carousel",
                                    command=self._generate)
-        self._gen_btn.pack(**FULL)
+        self._gen_btn.pack(padx=12, pady=4, fill=tk.X, ipady=6)
         self._progress = ttk.Progressbar(f, mode="indeterminate", length=200)
         self._progress.pack(**FULL)
+        tk.Frame(f, bg=SIDEBAR_BG, height=4).pack()
         ttk.Button(f, text="Open Output Folder",
                    command=self._open_output).pack(**FULL)
+        tk.Frame(f, bg=SIDEBAR_BG, height=16).pack()
 
     def _section(self, parent: tk.Frame, title: str) -> None:
-        tk.Label(parent, text=title, fg="gray",
+        tk.Frame(parent, bg="#2c2c2e", height=1).pack(
+            fill=tk.X, padx=0, pady=(10, 0))
+        tk.Label(parent, text=title, bg=SIDEBAR_BG, fg=SECTION_FG,
                  font=("", 8, "bold"), anchor="w").pack(
-            padx=10, pady=(8, 2), fill=tk.X)
+            padx=12, pady=(6, 4), fill=tk.X)
 
     # ── preview canvas ────────────────────────────────────────────────────────
 
