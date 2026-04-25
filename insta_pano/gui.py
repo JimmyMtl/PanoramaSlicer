@@ -25,9 +25,15 @@ from insta_pano.config import (
 )
 from insta_pano.processor import (
     add_debug_overlay,
+    add_jigsaw_overlay,
+    add_puzzle_overlay,
+    best_grid,
+    export_puzzle_pieces,
+    generate_puzzle,
     load_image,
     process_image,
     slice_canvas,
+    slice_canvas_puzzle,
 )
 from insta_pano.photo_picker import (
     LocalFolderPicker,
@@ -43,6 +49,7 @@ from insta_pano.utils import (
 
 SIDEBAR_W = 300
 TILE_H = 100
+_PUZZLE_BG = {"White": (255, 255, 255), "Black": (0, 0, 0)}
 PREVIEW_BG = "#111111"
 TILE_BG = "#1a1a1a"
 SIDEBAR_BG = "#1c1c1e"
@@ -253,6 +260,41 @@ class App(tk.Tk):
         ttk.Combobox(f, textvariable=self._format_var,
                      values=list(FORMATS.keys()), state="readonly").pack(**FULL)
 
+        # ── Cut Style ─────────────────────────────────────────────────────────
+        self._section(f, "CUT STYLE")
+        self._puzzle_var = tk.BooleanVar()
+        self._puzzle_var.trace_add("write", lambda *_: self._on_puzzle_toggled())
+        tk.Checkbutton(f, text="Puzzle mode", variable=self._puzzle_var,
+                       anchor="w", bg=SIDEBAR_BG, fg="#d1d1d6",
+                       activebackground=SIDEBAR_BG).pack(padx=12, pady=(2, 0), fill=tk.X)
+
+        depth_row = tk.Frame(f, bg=SIDEBAR_BG)
+        depth_row.pack(**FULL)
+        tk.Label(depth_row, text="Depth", **LBL).pack(side=tk.LEFT)
+        self._puzzle_depth_lbl = tk.Label(depth_row, text="10%",
+                                          bg=SIDEBAR_BG, fg="#aeaeb2", font=("", 9, "bold"))
+        self._puzzle_depth_lbl.pack(side=tk.RIGHT)
+        self._puzzle_depth_var = tk.IntVar(value=10)
+        self._puzzle_depth_var.trace_add("write", lambda *_: self._on_puzzle_depth_changed())
+        self._puzzle_depth_slider = ttk.Scale(f, from_=2, to=28,
+                                               variable=self._puzzle_depth_var,
+                                               orient=tk.HORIZONTAL)
+        self._puzzle_depth_slider.pack(**FULL)
+
+        bg_row = tk.Frame(f, bg=SIDEBAR_BG)
+        bg_row.pack(**FULL)
+        tk.Label(bg_row, text="Socket fill", **LBL).pack(side=tk.LEFT)
+        self._puzzle_bg_var = tk.StringVar(value="White")
+        self._puzzle_bg_var.trace_add("write", lambda *_: self._schedule_preview())
+        self._puzzle_bg_cb = ttk.Combobox(bg_row, textvariable=self._puzzle_bg_var,
+                                           values=["White", "Black"],
+                                           state="readonly", width=8)
+        self._puzzle_bg_cb.pack(side=tk.RIGHT)
+
+        self._puzzle_controls = [self._puzzle_depth_slider, self._puzzle_bg_cb]
+        for w in self._puzzle_controls:
+            w.state(["disabled"])
+
         # ── Crop & Zoom ───────────────────────────────────────────────────────
         self._section(f, "CROP & ZOOM")
         tk.Label(f, text="Drag preview to pan  •  ← → ↑ ↓ to nudge",
@@ -336,6 +378,45 @@ class App(tk.Tk):
         self._gen_btn.pack(padx=12, pady=4, fill=tk.X, ipady=6)
         self._progress = ttk.Progressbar(f, mode="indeterminate", length=200)
         self._progress.pack(**FULL)
+
+        # ── Jigsaw puzzle ─────────────────────────────────────────────────────
+        self._section(f, "JIGSAW PUZZLE")
+
+        jig_count_row = tk.Frame(f, bg=SIDEBAR_BG)
+        jig_count_row.pack(**FULL)
+        tk.Label(jig_count_row, text="Pieces", **LBL).pack(side=tk.LEFT)
+        self._jigsaw_pieces_var = tk.IntVar(value=20)
+        self._jigsaw_pieces_var.trace_add("write", lambda *_: self._on_jigsaw_pieces_changed())
+        ttk.Spinbox(jig_count_row, from_=4, to=500, width=7,
+                    textvariable=self._jigsaw_pieces_var).pack(side=tk.RIGHT)
+
+        self._jigsaw_grid_lbl = tk.Label(f, text="5 rows × 4 cols = 20 pieces",
+                                          bg=SIDEBAR_BG, fg=SECTION_FG, font=("", 9),
+                                          anchor="w")
+        self._jigsaw_grid_lbl.pack(padx=12, pady=(0, 2), fill=tk.X)
+
+        jig_bg_row = tk.Frame(f, bg=SIDEBAR_BG)
+        jig_bg_row.pack(**FULL)
+        tk.Label(jig_bg_row, text="Socket fill", **LBL).pack(side=tk.LEFT)
+        self._jigsaw_bg_var = tk.StringVar(value="White")
+        ttk.Combobox(jig_bg_row, textvariable=self._jigsaw_bg_var,
+                     values=["White", "Black"], state="readonly", width=8).pack(side=tk.RIGHT)
+
+        jig_btn_row = tk.Frame(f, bg=SIDEBAR_BG)
+        jig_btn_row.pack(**FULL)
+        ttk.Button(jig_btn_row, text="Preview Grid",
+                   command=self._preview_jigsaw_grid).pack(
+            side=tk.LEFT, expand=True, fill=tk.X)
+        ttk.Button(jig_btn_row, text="Restore",
+                   command=self._schedule_preview).pack(
+            side=tk.LEFT, padx=(4, 0), expand=True, fill=tk.X)
+
+        self._jigsaw_gen_btn = ttk.Button(f, text="Generate Jigsaw",
+                                           command=self._generate_jigsaw)
+        self._jigsaw_gen_btn.pack(padx=12, pady=4, fill=tk.X, ipady=6)
+        self._jigsaw_progress = ttk.Progressbar(f, mode="indeterminate", length=200)
+        self._jigsaw_progress.pack(**FULL)
+
         tk.Frame(f, bg=SIDEBAR_BG, height=4).pack()
         ttk.Button(f, text="Open Output Folder",
                    command=self._open_output).pack(**FULL)
@@ -439,7 +520,12 @@ class App(tk.Tk):
         )
         self._crop_excess_x = self._resized_full.width - canvas_w
         self._crop_excess_y = self._resized_full.height - slide_h
-        display_img = add_debug_overlay(canvas_img, slides, slide_w)
+        if self._puzzle_var.get():
+            display_img = add_puzzle_overlay(
+                canvas_img, slides, slide_w, self._get_puzzle_amplitude(slide_w)
+            )
+        else:
+            display_img = add_debug_overlay(canvas_img, slides, slide_w)
         self._display_img = display_img
         self._render_panorama(display_img, fast=True)
 
@@ -458,7 +544,15 @@ class App(tk.Tk):
             self._resized_full, slides * slide_w, slide_h,
             self._crop_x_var.get(), self._crop_y_var.get(),
         )
-        self._render_tile_strip(slice_canvas(canvas_img, slides, slide_w))
+        if self._puzzle_var.get():
+            tiles = slice_canvas_puzzle(
+                canvas_img, slides, slide_w,
+                self._get_puzzle_amplitude(slide_w),
+                self._get_puzzle_bg_color(),
+            )
+        else:
+            tiles = slice_canvas(canvas_img, slides, slide_w)
+        self._render_tile_strip(tiles)
 
     # ── keyboard shortcuts ────────────────────────────────────────────────────
 
@@ -516,6 +610,90 @@ class App(tk.Tk):
         self._crop_y_var.set(0.5)
         self._zoom_var.set(1.0)
 
+    # ── puzzle helpers ────────────────────────────────────────────────────────
+
+    def _get_puzzle_amplitude(self, slide_w: int) -> int:
+        return int(slide_w * self._puzzle_depth_var.get() / 100)
+
+    def _get_puzzle_bg_color(self) -> tuple:
+        return _PUZZLE_BG.get(self._puzzle_bg_var.get(), (255, 255, 255))
+
+    def _on_puzzle_toggled(self) -> None:
+        enabled = self._puzzle_var.get()
+        for w in self._puzzle_controls:
+            w.state(["!disabled"] if enabled else ["disabled"])
+        self._schedule_preview()
+
+    def _on_puzzle_depth_changed(self) -> None:
+        self._puzzle_depth_lbl.config(text=f"{self._puzzle_depth_var.get()}%")
+        self._schedule_preview()
+
+    # ── jigsaw helpers ────────────────────────────────────────────────────────
+
+    def _get_jigsaw_rows_cols(self) -> Tuple[int, int]:
+        n = max(4, self._jigsaw_pieces_var.get())
+        if self._source is not None:
+            return best_grid(n, self._source.width, self._source.height)
+        side = max(1, round(n ** 0.5))
+        return side, side
+
+    def _on_jigsaw_pieces_changed(self) -> None:
+        rows, cols = self._get_jigsaw_rows_cols()
+        self._jigsaw_grid_lbl.config(
+            text=f"{rows} rows × {cols} cols = {rows * cols} pieces"
+        )
+
+    def _preview_jigsaw_grid(self) -> None:
+        if self._source is None:
+            self._set_status("Open an image first.")
+            return
+        rows, cols = self._get_jigsaw_rows_cols()
+        overlay = add_jigsaw_overlay(self._source, rows, cols)
+        self._display_img = overlay
+        self._render_panorama(overlay)
+        self._set_status(
+            f"Jigsaw grid: {rows} × {cols} = {rows * cols} pieces  —  "
+            f"click Restore to go back to carousel view"
+        )
+
+    def _generate_jigsaw(self) -> None:
+        if self._source is None:
+            messagebox.showinfo("No image", "Open an image first.")
+            return
+
+        rows, cols = self._get_jigsaw_rows_cols()
+        bg_color = _PUZZLE_BG.get(self._jigsaw_bg_var.get(), (255, 255, 255))
+        source = self._source
+        output_str = self._output_var.get().strip() or DEFAULT_OUTPUT_DIR
+        raw_prefix = self._prefix_var.get().strip()
+        input_path = Path(self._input_var.get().strip())
+        use_png = self._png_var.get()
+        quality = int(self._quality_var.get())
+        out_prefix = (raw_prefix or input_path.stem) + "_puzzle"
+        output_dir = ensure_output_dir(output_str)
+        actual = rows * cols
+
+        self._jigsaw_gen_btn.state(["disabled"])
+        self._jigsaw_progress.start(12)
+        self._set_status(f"Generating {rows} × {cols} jigsaw ({actual} pieces)…")
+
+        def _run() -> None:
+            try:
+                pieces = generate_puzzle(source, rows, cols, bg_color)
+                saved = export_puzzle_pieces(
+                    pieces, output_dir, out_prefix, quality, use_png
+                )
+                msg = f"Jigsaw done — {len(saved)} pieces saved to {output_dir}"
+                self._ui(lambda: self._set_status(msg))
+            except Exception as exc:
+                err = str(exc)
+                self._ui(lambda: self._set_status(f"Jigsaw error: {err}"))
+            finally:
+                self._ui(self._jigsaw_progress.stop)
+                self._ui(lambda: self._jigsaw_gen_btn.state(["!disabled"]))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # ── image loading ─────────────────────────────────────────────────────────
 
     def _on_input_changed(self) -> None:
@@ -567,6 +745,9 @@ class App(tk.Tk):
         crop_x = self._crop_x_var.get()
         crop_y = self._crop_y_var.get()
         zoom = self._zoom_var.get()
+        puzzle_mode = self._puzzle_var.get()
+        puzzle_amplitude = self._get_puzzle_amplitude(slide_w)
+        puzzle_bg_color = self._get_puzzle_bg_color()
 
         if not self._preview_lock.acquire(blocking=False):
             self._preview_job = self.after(150, self._update_preview)
@@ -581,8 +762,16 @@ class App(tk.Tk):
                 )
                 excess_x = resized_full.width - canvas_w
                 excess_y = resized_full.height - slide_h
-                display_img = add_debug_overlay(canvas_img, slides, slide_w)
-                tiles = slice_canvas(canvas_img, slides, slide_w)
+                if puzzle_mode:
+                    display_img = add_puzzle_overlay(
+                        canvas_img, slides, slide_w, puzzle_amplitude
+                    )
+                    tiles = slice_canvas_puzzle(
+                        canvas_img, slides, slide_w, puzzle_amplitude, puzzle_bg_color
+                    )
+                else:
+                    display_img = add_debug_overlay(canvas_img, slides, slide_w)
+                    tiles = slice_canvas(canvas_img, slides, slide_w)
                 rkey = (round(zoom, 4), slides, fmt)
                 status = (
                     f"{slides} slides × {slide_w}×{slide_h} px  "
@@ -714,6 +903,9 @@ class App(tk.Tk):
         crop_x = self._crop_x_var.get()
         crop_y = self._crop_y_var.get()
         zoom = self._zoom_var.get()
+        puzzle_mode = self._puzzle_var.get()
+        puzzle_amplitude = self._get_puzzle_amplitude(FORMATS[fmt][0])
+        puzzle_bg_color = self._get_puzzle_bg_color()
         output_dir = ensure_output_dir(output_str)
 
         self._gen_btn.state(["disabled"])
@@ -736,6 +928,9 @@ class App(tk.Tk):
                     crop_x=crop_x,
                     crop_y=crop_y,
                     zoom=zoom,
+                    puzzle_mode=puzzle_mode,
+                    puzzle_amplitude=puzzle_amplitude,
+                    puzzle_bg_color=puzzle_bg_color,
                 )
                 msg = ("Dry run complete — no files written." if dry_run
                        else f"Done — {len(saved)} slide"
